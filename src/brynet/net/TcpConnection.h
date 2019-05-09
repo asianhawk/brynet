@@ -81,7 +81,7 @@ namespace brynet { namespace net {
         virtual ~TcpConnection() BRYNET_NOEXCEPT;
 
     private:
-        void                            trySend();
+        void                            tryPostSend();
 
         void                            growRecvBuffer();
 
@@ -151,8 +151,6 @@ namespace brynet { namespace net {
         EnterCallback                   mEnterCallback;
         DataCallback                    mDataCallback;
         DisconnectedCallback            mDisConnectCallback;
-
-        bool                            mIsPostFlush;
 
         BrynetAny                       mUD;
 

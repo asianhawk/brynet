@@ -27,7 +27,6 @@ namespace brynet { namespace net {
     {
         mRecvData = false;
         mCheckTime = std::chrono::steady_clock::duration::zero();
-        mIsPostFlush = false;
 
         mCanWrite = true;
 
@@ -144,12 +143,20 @@ namespace brynet { namespace net {
         {
             std::lock_guard<std::mutex> lck(this->mSendGuard);
             mReadyList.push_back({ packet, packet->size(), callback });
+            if (mSending)
+            {
+                return;
+            }
+            mSending = true;
         }
 
-        trySend();
+        auto sharedThis = shared_from_this();
+        mEventLoop->runAsyncFunctor([=]() {
+                sharedThis->runAfterFlush();
+            });
     }
 
-    void TcpConnection::trySend()
+    void TcpConnection::tryPostSend()
     {
         {
             std::lock_guard<std::mutex> lck(this->mSendGuard);
@@ -230,7 +237,7 @@ namespace brynet { namespace net {
             }
         }
 #endif
-        trySend();
+        tryPostSend();
     }
 
     void TcpConnection::runAfterFlush()
@@ -251,11 +258,9 @@ namespace brynet { namespace net {
             }
         }
 
-        if (!mIsPostFlush && !mSendList.empty() && mCanWrite)
+        if (!mSendList.empty() && mCanWrite)
         {
-            mIsPostFlush = false;
             flush();
-            mIsPostFlush = true;
         }
     }
 
@@ -385,7 +390,7 @@ namespace brynet { namespace net {
         {
             return;
         }
-        trySend();
+        tryPostSend();
     }
 
 #ifdef PLATFORM_WINDOWS
@@ -396,7 +401,7 @@ namespace brynet { namespace net {
 
     void TcpConnection::normalFlush()
     {
-        static  const   int SENDBUF_SIZE = 1024 * 32;
+        static  const   int SENDBUF_SIZE = 1024 * 1024;
         if (threadLocalSendBuf == nullptr)
         {
             threadLocalSendBuf = (char*)malloc(SENDBUF_SIZE);
