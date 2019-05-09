@@ -43,6 +43,7 @@ namespace brynet { namespace net {
         mIsHandsharked = false;
 #endif
         mEnterCallback = std::move(enterCallback);
+        mSending = false;
     }
 
     TcpConnection::~TcpConnection() BRYNET_NOEXCEPT
@@ -140,14 +141,29 @@ namespace brynet { namespace net {
 
     void TcpConnection::send(const PacketPtr& packet, const PacketSendedCallback& callback)
     {
-        auto packetCapture = packet;
-        auto callbackCapture = callback;
+        {
+            std::lock_guard<std::mutex> lck(this->mSendGuard);
+            mReadyList.push_back({ packet, packet->size(), callback });
+        }
+
+        trySend();
+    }
+
+    void TcpConnection::trySend()
+    {
+        {
+            std::lock_guard<std::mutex> lck(this->mSendGuard);
+            if (mSending || mReadyList.empty())
+            {
+                return;
+            }
+            mSending = true;
+        }
+
         auto sharedThis = shared_from_this();
-        mEventLoop->runAsyncFunctor([sharedThis, packetCapture, callbackCapture]() mutable {
-            const auto len = packetCapture->size();
-            sharedThis->mSendList.push_back({ std::move(packetCapture), len, std::move(callbackCapture) });
-            sharedThis->runAfterFlush();
-        });
+        mEventLoop->runAsyncFunctor([=]() {
+                sharedThis->runAfterFlush();
+            });
     }
 
     void TcpConnection::sendInLoop(const PacketPtr& packet, const PacketSendedCallback& callback)
@@ -214,20 +230,31 @@ namespace brynet { namespace net {
             }
         }
 #endif
-
-        runAfterFlush();
+        trySend();
     }
 
     void TcpConnection::runAfterFlush()
     {
+        {
+            std::lock_guard<std::mutex> lck(this->mSendGuard);
+            if (mSendList.empty())
+            {
+                mSendList = std::move(mReadyList);
+            }
+            else
+            {
+                for (auto&& msg : mReadyList)
+                {
+                    mSendList.push_back(std::move(msg));
+                }
+                mReadyList.clear();
+            }
+        }
+
         if (!mIsPostFlush && !mSendList.empty() && mCanWrite)
         {
-            auto sharedThis = shared_from_this();
-            mEventLoop->runFunctorAfterLoop([sharedThis]() {
-                sharedThis->mIsPostFlush = false;
-                sharedThis->flush();
-            });
-
+            mIsPostFlush = false;
+            flush();
             mIsPostFlush = true;
         }
     }
@@ -335,22 +362,30 @@ namespace brynet { namespace net {
 
     void TcpConnection::flush()
     {
+        {
 #ifdef PLATFORM_WINDOWS
-        normalFlush();
+            normalFlush();
 #else
 #ifdef USE_OPENSSL
-        if (mSSL != nullptr)
-        {
-            normalFlush();
-        }
-        else
-        {
-            quickFlush();
-        }
+            if (mSSL != nullptr)
+            {
+                normalFlush();
+            }
+            else
+            {
+                quickFlush();
+            }
 #else
-        quickFlush();
+            quickFlush();
 #endif
 #endif
+            mSending = false;
+        }
+        if (!mCanWrite)
+        {
+            return;
+        }
+        trySend();
     }
 
 #ifdef PLATFORM_WINDOWS

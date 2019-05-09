@@ -81,6 +81,8 @@ namespace brynet { namespace net {
         virtual ~TcpConnection() BRYNET_NOEXCEPT;
 
     private:
+        void                            trySend();
+
         void                            growRecvBuffer();
 
         void                            pingCheck();
@@ -143,6 +145,7 @@ namespace brynet { namespace net {
         };
 
         using PacketListType = std::deque<PendingPacket>;
+        PacketListType                  mReadyList;
         PacketListType                  mSendList;
 
         EnterCallback                   mEnterCallback;
@@ -161,6 +164,8 @@ namespace brynet { namespace net {
         bool                            mRecvData;
         std::chrono::nanoseconds        mCheckTime;
         timer::Timer::WeakPtr           mTimer;
+        std::mutex                      mSendGuard;
+        bool                            mSending;
     };
 
 } }
