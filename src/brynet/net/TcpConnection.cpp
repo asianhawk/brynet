@@ -42,7 +42,7 @@ namespace brynet { namespace net {
         mIsHandsharked = false;
 #endif
         mEnterCallback = std::move(enterCallback);
-        mSending = false;
+        mPostSending = false;
     }
 
     TcpConnection::~TcpConnection() BRYNET_NOEXCEPT
@@ -141,35 +141,35 @@ namespace brynet { namespace net {
     void TcpConnection::send(const PacketPtr& packet, const PacketSendedCallback& callback)
     {
         {
-            std::lock_guard<std::mutex> lck(this->mSendGuard);
+            std::lock_guard<std::mutex> lck(mReadySendGuard);
             mReadyList.push_back({ packet, packet->size(), callback });
-            if (mSending)
+            if (mPostSending || !mCanWrite)
             {
                 return;
             }
-            mSending = true;
+            mPostSending = true;
         }
 
         auto sharedThis = shared_from_this();
         mEventLoop->runAsyncFunctor([=]() {
-                sharedThis->runAfterFlush();
+                sharedThis->runFlush();
             });
     }
 
     void TcpConnection::tryPostSend()
     {
         {
-            std::lock_guard<std::mutex> lck(this->mSendGuard);
-            if (mSending || mReadyList.empty())
+            std::lock_guard<std::mutex> lck(mReadySendGuard);
+            if (mPostSending || (mSendList.empty() && mReadyList.empty()))
             {
                 return;
             }
-            mSending = true;
+            mPostSending = true;
         }
 
         auto sharedThis = shared_from_this();
         mEventLoop->runAsyncFunctor([=]() {
-                sharedThis->runAfterFlush();
+                sharedThis->runFlush();
             });
     }
 
@@ -180,7 +180,11 @@ namespace brynet { namespace net {
         {
             const auto len = packet->size();
             mSendList.push_back({ packet, len, callback });
-            runAfterFlush();
+            runFlush();
+        }
+        else
+        {
+            throw std::runtime_error("not in io thread");
         }
     }
 
@@ -240,22 +244,46 @@ namespace brynet { namespace net {
         tryPostSend();
     }
 
-    void TcpConnection::runAfterFlush()
+    void TcpConnection::runFlush()
     {
         {
-            std::lock_guard<std::mutex> lck(this->mSendGuard);
+            std::lock_guard<std::mutex> lck(mReadySendGuard);
             if (mSendList.empty())
             {
                 mSendList = std::move(mReadyList);
             }
             else
             {
-                for (auto&& msg : mReadyList)
+                if (true)
                 {
-                    mSendList.push_back(std::move(msg));
+                    for (auto&& msg : mReadyList)
+                    {
+                        mSendList.emplace_back(std::move(msg));
+                    }
+                    mReadyList.clear();
                 }
-                mReadyList.clear();
+                else
+                {
+                    if (mSendList.size() >= mReadyList.size())
+                    {
+                        for (auto&& msg : mReadyList)
+                        {
+                            mSendList.emplace_back(std::move(msg));
+                        }
+                        mReadyList.clear();
+                    }
+                    else
+                    {
+                        for (auto&& msg : mSendList)
+                        {
+                            mReadyList.push_front(std::move(msg));
+                        }
+                        mSendList.clear();
+                        mSendList = std::move(mReadyList);
+                    }
+                }
             }
+            mPostSending = false;
         }
 
         if (!mSendList.empty() && mCanWrite)
@@ -367,30 +395,22 @@ namespace brynet { namespace net {
 
     void TcpConnection::flush()
     {
-        {
 #ifdef PLATFORM_WINDOWS
-            normalFlush();
+        normalFlush();
 #else
 #ifdef USE_OPENSSL
-            if (mSSL != nullptr)
-            {
-                normalFlush();
-            }
-            else
-            {
-                quickFlush();
-            }
-#else
-            quickFlush();
-#endif
-#endif
-            mSending = false;
-        }
-        if (!mCanWrite)
+        if (mSSL != nullptr)
         {
-            return;
+            normalFlush();
         }
-        tryPostSend();
+        else
+        {
+            quickFlush();
+        }
+#else
+        quickFlush();
+#endif
+#endif
     }
 
 #ifdef PLATFORM_WINDOWS

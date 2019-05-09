@@ -103,7 +103,7 @@ namespace brynet { namespace net {
         void                            procCloseInLoop();
         void                            procShutdownInLoop();
 
-        void                            runAfterFlush();
+        void                            runFlush();
 #ifdef PLATFORM_LINUX
         void                            removeCheckWrite();
 #endif
@@ -147,6 +147,8 @@ namespace brynet { namespace net {
         using PacketListType = std::deque<PendingPacket>;
         PacketListType                  mReadyList;
         PacketListType                  mSendList;
+        std::mutex                      mReadySendGuard;
+        bool                            mPostSending;
 
         EnterCallback                   mEnterCallback;
         DataCallback                    mDataCallback;
@@ -162,8 +164,6 @@ namespace brynet { namespace net {
         bool                            mRecvData;
         std::chrono::nanoseconds        mCheckTime;
         timer::Timer::WeakPtr           mTimer;
-        std::mutex                      mSendGuard;
-        bool                            mSending;
     };
 
 } }
