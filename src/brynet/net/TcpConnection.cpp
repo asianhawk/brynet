@@ -152,7 +152,9 @@ namespace brynet { namespace net {
 
         auto sharedThis = shared_from_this();
         mEventLoop->runAsyncFunctor([=]() {
-                sharedThis->runFlush();
+                sharedThis->getEventLoop()->runFunctorAfterLoop([=]() {
+                    sharedThis->runFlush();
+                });
             });
     }
 
@@ -169,7 +171,9 @@ namespace brynet { namespace net {
 
         auto sharedThis = shared_from_this();
         mEventLoop->runAsyncFunctor([=]() {
-                sharedThis->runFlush();
+                sharedThis->getEventLoop()->runFunctorAfterLoop([=]() {
+                    sharedThis->runFlush();
+                });
             });
     }
 
@@ -180,7 +184,10 @@ namespace brynet { namespace net {
         {
             const auto len = packet->size();
             mSendList.push_back({ packet, len, callback });
-            runFlush();
+            auto sharedThis = shared_from_this();
+            sharedThis->getEventLoop()->runFunctorAfterLoop([=]() {
+                    sharedThis->runFlush();
+                });
         }
         else
         {
