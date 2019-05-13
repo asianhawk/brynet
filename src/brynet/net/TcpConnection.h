@@ -81,6 +81,8 @@ namespace brynet { namespace net {
         virtual ~TcpConnection() BRYNET_NOEXCEPT;
 
     private:
+        bool                            checkCanPostSend();
+        void                            postSend();
         void                            tryPostSend();
 
         void                            growRecvBuffer();
@@ -146,6 +148,7 @@ namespace brynet { namespace net {
 
         using PacketListType = std::deque<PendingPacket>;
         PacketListType                  mReadyList;
+        PacketListType                  mReadyListCopy;
         PacketListType                  mSendList;
         std::mutex                      mReadySendGuard;
         bool                            mPostSending;

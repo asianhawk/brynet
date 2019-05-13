@@ -1,5 +1,6 @@
 ﻿#include <cassert>
 #include <cstring>
+#include <algorithm>
 
 #include <brynet/net/SocketLibFunction.h>
 #include <brynet/net/EventLoop.h>
@@ -143,38 +144,53 @@ namespace brynet { namespace net {
         {
             std::lock_guard<std::mutex> lck(mReadySendGuard);
             mReadyList.push_back({ packet, packet->size(), callback });
-            if (mPostSending || !mCanWrite)
+            if (!checkCanPostSend())
             {
                 return;
             }
             mPostSending = true;
         }
 
-        auto sharedThis = shared_from_this();
-        mEventLoop->runAsyncFunctor([=]() {
-                sharedThis->getEventLoop()->runFunctorAfterLoop([=]() {
+        postSend();
+    }
+
+    bool TcpConnection::checkCanPostSend()
+    {
+        return !mPostSending && (!mSendList.empty() || !mReadyList.empty()) && mCanWrite;
+    }
+
+    void TcpConnection::postSend()
+    {
+        if (mEventLoop->isInLoopThread())
+        {
+            auto sharedThis = shared_from_this();
+            mEventLoop->runFunctorAfterLoop([=]() {
                     sharedThis->runFlush();
                 });
-            });
+        }
+        else
+        {
+            auto sharedThis = shared_from_this();
+            mEventLoop->runAsyncFunctor([=]() {
+                    sharedThis->getEventLoop()->runFunctorAfterLoop([=]() {
+                            sharedThis->runFlush();
+                        });
+                });
+        }
     }
 
     void TcpConnection::tryPostSend()
     {
         {
             std::lock_guard<std::mutex> lck(mReadySendGuard);
-            if (mPostSending || (mSendList.empty() && mReadyList.empty()))
+            if (!checkCanPostSend())
             {
                 return;
             }
             mPostSending = true;
         }
 
-        auto sharedThis = shared_from_this();
-        mEventLoop->runAsyncFunctor([=]() {
-                sharedThis->getEventLoop()->runFunctorAfterLoop([=]() {
-                    sharedThis->runFlush();
-                });
-            });
+        postSend();
     }
 
     void TcpConnection::sendInLoop(const PacketPtr& packet, const PacketSendedCallback& callback)
@@ -182,8 +198,7 @@ namespace brynet { namespace net {
         assert(mEventLoop->isInLoopThread());
         if (mEventLoop->isInLoopThread())
         {
-            const auto len = packet->size();
-            mSendList.push_back({ packet, len, callback });
+            mSendList.push_back({ packet, packet->size(), callback });
             auto sharedThis = shared_from_this();
             sharedThis->getEventLoop()->runFunctorAfterLoop([=]() {
                     sharedThis->runFlush();
@@ -255,42 +270,25 @@ namespace brynet { namespace net {
     {
         {
             std::lock_guard<std::mutex> lck(mReadySendGuard);
-            if (mSendList.empty())
+            mReadyListCopy.swap(mReadyList);
+            mPostSending = false;
+        }
+
+        {
+            if (mSendList.size() >= mReadyListCopy.size())
             {
-                mSendList = std::move(mReadyList);
+                std::copy(mReadyListCopy.begin(), mReadyListCopy.end(), std::back_insert_iterator(mSendList));
+                mReadyListCopy.clear();
             }
             else
             {
-                if (true)
+                for (auto&& msg : mSendList)
                 {
-                    for (auto&& msg : mReadyList)
-                    {
-                        mSendList.emplace_back(std::move(msg));
-                    }
-                    mReadyList.clear();
+                    mReadyListCopy.push_front(std::move(msg));
                 }
-                else
-                {
-                    if (mSendList.size() >= mReadyList.size())
-                    {
-                        for (auto&& msg : mReadyList)
-                        {
-                            mSendList.emplace_back(std::move(msg));
-                        }
-                        mReadyList.clear();
-                    }
-                    else
-                    {
-                        for (auto&& msg : mSendList)
-                        {
-                            mReadyList.push_front(std::move(msg));
-                        }
-                        mSendList.clear();
-                        mSendList = std::move(mReadyList);
-                    }
-                }
+                mSendList.clear();
+                mSendList = std::move(mReadyListCopy);
             }
-            mPostSending = false;
         }
 
         if (!mSendList.empty() && mCanWrite)
