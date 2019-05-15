@@ -54,7 +54,6 @@ namespace brynet { namespace net {
 
         void                            send(const char* buffer, size_t len, const PacketSendedCallback& callback = nullptr);
         void                            send(const PacketPtr&, const PacketSendedCallback& callback = nullptr);
-        void                            sendInLoop(const PacketPtr&, const PacketSendedCallback& callback = nullptr);
 
         void                            setDataCallback(DataCallback cb);
         void                            setDisConnectCallback(DisconnectedCallback cb);
@@ -81,6 +80,10 @@ namespace brynet { namespace net {
         virtual ~TcpConnection() BRYNET_NOEXCEPT;
 
     private:
+        bool                            checkCanPostSend();
+        void                            postSend();
+        void                            tryPostSend();
+
         void                            growRecvBuffer();
 
         void                            pingCheck();
@@ -101,7 +104,7 @@ namespace brynet { namespace net {
         void                            procCloseInLoop();
         void                            procShutdownInLoop();
 
-        void                            runAfterFlush();
+        void                            runFlush();
 #ifdef PLATFORM_LINUX
         void                            removeCheckWrite();
 #endif
@@ -143,13 +146,15 @@ namespace brynet { namespace net {
         };
 
         using PacketListType = std::deque<PendingPacket>;
+        PacketListType                  mReadyList;
+        PacketListType                  mReadyListCopy;
         PacketListType                  mSendList;
+        std::mutex                      mReadySendGuard;
+        bool                            mPostSending;
 
         EnterCallback                   mEnterCallback;
         DataCallback                    mDataCallback;
         DisconnectedCallback            mDisConnectCallback;
-
-        bool                            mIsPostFlush;
 
         BrynetAny                       mUD;
 
